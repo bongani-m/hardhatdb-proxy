@@ -1,0 +1,153 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Semver tag, such as v0.1.0
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  version:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      prerelease: ${{ steps.resolve.outputs.prerelease }}
+    steps:
+      - name: Resolve version
+        id: resolve
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            version="$INPUT_VERSION"
+          else
+            version="$REF_NAME"
+          fi
+          if ! [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.]+)?$ ]]; then
+            echo "version must look like v0.1.0"
+            exit 1
+          fi
+          prerelease=false
+          if [[ "$version" == *-alpha* || "$version" == *-beta* || "$version" == *-rc* ]]; then
+            prerelease=true
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+
+  binaries:
+    name: ${{ matrix.target }}-${{ matrix.arch }}
+    needs: version
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux
+            arch: amd64
+          - os: ubuntu-24.04-arm
+            target: linux
+            arch: arm64
+          - os: macos-latest
+            target: darwin
+            arch: arm64
+          - os: macos-15-intel
+            target: darwin
+            arch: amd64
+    steps:
+      - name: Check out hardhatdb-proxy
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build
+        env:
+          TARGET: ${{ matrix.target }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          cargo build --release --locked
+          cp target/release/hardhatdb-proxy "hardhatdb-proxy-${TARGET}-${ARCH}"
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: hardhatdb-proxy-${{ matrix.target }}-${{ matrix.arch }}
+          path: hardhatdb-proxy-${{ matrix.target }}-${{ matrix.arch }}
+
+  release:
+    name: GitHub release
+    needs: [version, binaries]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out hardhatdb-proxy
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: hardhatdb-proxy-*
+          merge-multiple: true
+          path: dist
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
+        run: |
+          repo="${{ github.repository }}"
+          if gh release view "$VERSION" --repo "$repo" >/dev/null 2>&1; then
+            gh release upload "$VERSION" dist/hardhatdb-proxy-* --repo "$repo" --clobber
+          else
+            args=(--repo "$repo" --title "$VERSION" --generate-notes)
+            if [ "$PRERELEASE" = "true" ]; then
+              args+=(--prerelease)
+            fi
+            gh release create "$VERSION" dist/hardhatdb-proxy-* "${args[@]}"
+          fi
+
+  image:
+    name: Docker image
+    needs: version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out hardhatdb-proxy
+        uses: actions/checkout@v4
+
+      - name: Build image
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          docker build -t "hardhatdb-proxy:${VERSION}" .
+
+      - name: Push image
+        env:
+          GHCR_IMAGE: ghcr.io/${{ github.repository }}
+          VERSION: ${{ needs.version.outputs.version }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
+        run: |
+          image="$(printf '%s' "$GHCR_IMAGE" | tr '[:upper:]' '[:lower:]')"
+          echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker tag "hardhatdb-proxy:${VERSION}" "${image}:${VERSION}"
+          docker push "${image}:${VERSION}"
+          if [ "$PRERELEASE" != "true" ]; then
+            docker tag "hardhatdb-proxy:${VERSION}" "${image}:latest"
+            docker push "${image}:latest"
+          fi
