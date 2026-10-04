@@ -1,0 +1,11 @@
+[package]
+name = "hardhatdb-proxy"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "TCP proxy for one HardhatDB Raft group"
+repository = "https://github.com/bongani-m/hardhatdb-proxy"
+publish = false
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "sync", "signal"] }

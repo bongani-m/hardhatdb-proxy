@@ -1,0 +1,8 @@
+hardhatdb-proxy
+Licensed under the Apache License, Version 2.0. See LICENSE.
+
+This program is built with the following works:
+
+  Tokio
+  https://github.com/tokio-rs/tokio
+  MIT License

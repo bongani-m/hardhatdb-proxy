@@ -1,0 +1,39 @@
+# Override for a HardhatDB checkout. From this directory:
+#
+#	HARDHATDB_BOOTSTRAP_PASSWORD=secret docker compose \
+#	  -f ../hardhatdb/compose.yaml -f compose.yaml up --build
+#
+# Host port 3390 is the single MySQL address. Node metrics stay on vpc.
+
+services:
+  n1:
+    environment:
+      HARDHATDB_METRICS_ADDR: 0.0.0.0:9090
+  n2:
+    environment:
+      HARDHATDB_METRICS_ADDR: 0.0.0.0:9090
+  n3:
+    environment:
+      HARDHATDB_METRICS_ADDR: 0.0.0.0:9090
+
+  proxy:
+    # Paths are resolved from the first compose file, which is the HardhatDB checkout.
+    build:
+      context: ../hardhatdb-proxy
+      dockerfile: Dockerfile
+    image: hardhatdb-proxy
+    hostname: proxy
+    restart: unless-stopped
+    depends_on:
+      - n1
+      - n2
+      - n3
+    networks:
+      vpc: {}
+    ports:
+      - "3390:3306"
+    environment:
+      HARDHATDB_PROXY_LISTEN: 0.0.0.0:3306
+      HARDHATDB_PROXY_BACKENDS: n1=10.116.0.2:3306,n2=10.116.0.3:3306,n3=10.116.0.4:3306
+      HARDHATDB_PROXY_HEALTH_PORT: "9090"
+      HARDHATDB_PROXY_BALANCE: first
